@@ -1,13 +1,113 @@
 import json
 import asyncio
 import httpx
-from typing import AsyncGenerator, Dict, Any, List
+from typing import AsyncGenerator, Dict, Any, List, Optional
 from app.config import settings
 from app.services.storage_service import storage_service
+
+
+def _resolve_credentials() -> tuple[str, str, str]:
+    app_settings = storage_service.get_settings()
+    api_key = app_settings.get("model_api_key") or settings.MODEL_API_KEY
+    base_url = (app_settings.get("model_api_base_url") or settings.MODEL_API_BASE_URL).rstrip("/")
+    compat = (
+        (app_settings.get("model_api_compat") or "")
+        or __import__("os").getenv("MODEL_API_COMPAT", "")
+    ).strip().lower()
+    if not compat:
+        lowered = base_url.lower()
+        if "deepseek.com" in lowered or lowered.endswith("/v1") or "/v1/" in lowered:
+            compat = "openai"
+        else:
+            compat = "prediction"
+    return api_key, base_url, compat
+
+
+def _build_openai_messages(
+    messages: List[Dict[str, str]],
+    system_prompt: str,
+) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    if system_prompt and system_prompt.strip():
+        out.append({"role": "system", "content": system_prompt.strip()})
+    for m in messages:
+        role = m.get("role") or "user"
+        if role not in {"system", "user", "assistant"}:
+            role = "user"
+        content = (m.get("content") or "").strip()
+        image_url = m.get("image_url")
+        if image_url and role == "user":
+            # DeepSeek chat 文本路径：把图片 URL 附在正文，避免非多模态端点失败
+            content = f"{content}\n[Attached Image: {image_url}]".strip()
+        if content:
+            out.append({"role": role, "content": content})
+    return out
+
 
 class ModelProviderService:
     def __init__(self):
         pass
+
+    async def _stream_openai_compatible(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+        messages: List[Dict[str, str]],
+        system_prompt: str,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """OpenAI Chat Completions 兼容路径（DeepSeek / 通用 /v1）。"""
+        endpoint = f"{base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": (model or "deepseek-chat").strip(),
+            "messages": _build_openai_messages(messages, system_prompt),
+            "stream": False,
+            "temperature": 0.7,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(endpoint, json=payload, headers=headers)
+                if response.status_code != 200:
+                    yield {
+                        "type": "content.delta",
+                        "delta": (
+                            f"OpenAI-compatible endpoint ({endpoint}) returned "
+                            f"HTTP {response.status_code}: {response.text}"
+                        ),
+                    }
+                    yield {"type": "turn.completed", "ok": False}
+                    return
+                res_data = response.json()
+                content = (
+                    res_data.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                )
+                if not content:
+                    content = res_data.get("result") or res_data.get("output") or ""
+                if not content:
+                    yield {
+                        "type": "content.delta",
+                        "delta": f"Empty completion from {endpoint}: {json.dumps(res_data)[:500]}",
+                    }
+                    yield {"type": "turn.completed", "ok": False}
+                    return
+                words = str(content).split(" ")
+                for i, w in enumerate(words):
+                    yield {
+                        "type": "content.delta",
+                        "delta": w + (" " if i < len(words) - 1 else ""),
+                    }
+                    await asyncio.sleep(0.02)
+                yield {"type": "turn.completed", "ok": True}
+        except Exception as exc:
+            yield {"type": "content.delta", "delta": f"OpenAI-compatible request failed: {exc}"}
+            yield {"type": "turn.completed", "ok": False}
 
     async def stream_chat_completion(
         self,
@@ -19,9 +119,7 @@ class ModelProviderService:
         Submit chat requests to the configured inference endpoint.
         Uses exact user-selected model slug without any model remapping or fallback.
         """
-        app_settings = storage_service.get_settings()
-        api_key = app_settings.get("model_api_key") or settings.MODEL_API_KEY
-        base_url = (app_settings.get("model_api_base_url") or settings.MODEL_API_BASE_URL).rstrip("/")
+        api_key, base_url, compat = _resolve_credentials()
 
         if not api_key:
             yield {
@@ -37,6 +135,17 @@ class ModelProviderService:
                 "delta": "An inference API base URL is missing. Add it in App Settings → Connections."
             }
             yield {"type": "turn.completed", "ok": False}
+            return
+
+        if compat in {"openai", "openai-compatible", "deepseek"}:
+            async for event in self._stream_openai_compatible(
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                messages=messages,
+                system_prompt=system_prompt,
+            ):
+                yield event
             return
 
         # Target EXACT model slug passed by user without any alias remapping or fallback
@@ -203,5 +312,3 @@ class ModelProviderService:
         yield {"type": "turn.completed", "ok": False}
 
 provider_service = ModelProviderService()
-
-

@@ -246,6 +246,15 @@ async function buildEnv(cfg) {
     NEXT_PUBLIC_API_URL: "/api/v1",
     CORS_ORIGINS: `http://127.0.0.1:${cfg.uiPort},http://localhost:${cfg.uiPort}`,
   };
+  // 跨站 Guest iframe 拦 Cookie → 注入 Bearer（launcher 也会在 FastAPI ready 后再读一次）
+  if (!env.NEXT_PUBLIC_API_TOKEN) {
+    try {
+      const token = (await readFile(path.join(cfg.dataDir, ".auth-token"), "utf8")).trim();
+      if (token) env.NEXT_PUBLIC_API_TOKEN = token;
+    } catch {
+      // first boot: launcher fills after FastAPI creates token
+    }
+  }
   if (cfg.computerProvider === "docker") {
     env.COMPUTER_DOCKER_IMAGE =
       secrets.COMPUTER_DOCKER_IMAGE || process.env.COMPUTER_DOCKER_IMAGE || "open-dots-computer:1.62.1";

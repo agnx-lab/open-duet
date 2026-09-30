@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { access, constants as fsConstants } from "node:fs/promises";
+import { access, constants as fsConstants, readFile } from "node:fs/promises";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../..");
@@ -162,6 +162,26 @@ if (!apiReady) {
   shutdown();
 }
 
+// Guest 嵌在 Agnx（跨站 iframe）时第三方 Cookie 会被拦；给 Next 注入 Bearer，走 api.js NEXT_PUBLIC_API_TOKEN。
+const dataDir = String(process.env.DATA_DIR || "").trim();
+let apiToken = String(process.env.NEXT_PUBLIC_API_TOKEN || process.env.APP_AUTH_TOKEN || "").trim();
+if (!apiToken && dataDir) {
+  try {
+    apiToken = (await readFile(path.join(dataDir, ".auth-token"), "utf8")).trim();
+  } catch {
+    apiToken = "";
+  }
+}
+const nextEnv = {
+  ...env,
+  ...(apiToken ? { NEXT_PUBLIC_API_TOKEN: apiToken } : {}),
+};
+if (apiToken) {
+  console.error("[open-dots-launcher] NEXT_PUBLIC_API_TOKEN set for Guest Bearer auth");
+} else {
+  console.error("[open-dots-launcher] warn: no auth token for Next; Guest may 401 under cross-site iframe");
+}
+
 const nextBin = path.join(clientDir, "node_modules", "next", "dist", "bin", "next");
 const nextCommand = (await pathExists(nextBin)) ? process.execPath : "npx";
 const nextArgs =
@@ -173,7 +193,7 @@ const nextArgs =
       ? [nextBin, "dev", "-H", "127.0.0.1", "-p", String(cfg.uiPort)]
       : ["next", "dev", "-H", "127.0.0.1", "-p", String(cfg.uiPort)];
 
-spawnChild(nextCommand, nextArgs, { cwd: clientDir, env }, "next");
+spawnChild(nextCommand, nextArgs, { cwd: clientDir, env: nextEnv }, "next");
 
 const uiReady = await waitFor(`http://127.0.0.1:${cfg.uiPort}/`, 180_000, "next");
 if (!uiReady) {

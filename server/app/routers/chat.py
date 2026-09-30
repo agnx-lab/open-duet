@@ -201,15 +201,17 @@ async def stream_turn(thread_id: str, model: Optional[str] = Query("gpt-5-mini")
                         }),
                     }
 
-        if tool_context:
-            system_prompt = f"{system_prompt}\n\n{tool_context}"
+        # 注意：不可在本闭包里对 system_prompt 赋值，否则空 tool_context 时会 UnboundLocalError。
+        effective_system_prompt = (
+            f"{system_prompt}\n\n{tool_context}" if tool_context else system_prompt
+        )
 
         # Stream content from inference adapter
         try:
             async for event in provider_service.stream_chat_completion(
                 model=selected_model,
                 messages=formatted_history,
-                system_prompt=system_prompt
+                system_prompt=effective_system_prompt
             ):
                 if event["type"] == "content.delta":
                     accumulated_text += event["delta"]

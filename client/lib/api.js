@@ -179,46 +179,71 @@ export async function fetchAuditEvents(limit = 100) {
   }
 }
 
+/**
+ * 订阅 chat SSE。跨站 Guest iframe 下 EventSource 无法带 Authorization 且 Cookie 常被拦，
+ * 故统一用 fetch + Bearer（withAuthHeaders）读流。
+ */
 export function subscribeToChatStream(threadId, model, onEvent, onError) {
   const url = `${API_BASE_URL}/chat/stream/${threadId}?model=${encodeURIComponent(model)}`;
-  let eventSource = null;
+  const controller = new AbortController();
   let cancelled = false;
 
-  ensureSession()
-    .then(() => {
+  (async () => {
+    try {
+      await ensureSession();
       if (cancelled) return;
-      eventSource = new EventSource(url, { withCredentials: true });
-
-      eventSource.onmessage = (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (onEvent) onEvent(data);
-        } catch (err) {
-          console.warn('Failed to parse SSE payload:', err);
+      const res = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        headers: withAuthHeaders({ Accept: "text/event-stream" }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        throw new Error(`SSE HTTP ${res.status}`);
+      }
+      if (!res.body) {
+        throw new Error("SSE response has no body");
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (!cancelled) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const chunks = buffer.split(/\n\n/);
+        buffer = chunks.pop() || "";
+        for (const chunk of chunks) {
+          const dataLines = chunk
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart());
+          if (!dataLines.length) continue;
+          const payload = dataLines.join("\n");
+          if (!payload || payload === "[DONE]") continue;
+          try {
+            const data = JSON.parse(payload);
+            if (onEvent) onEvent(data);
+          } catch (err) {
+            console.warn("Failed to parse SSE payload:", err);
+          }
         }
-      };
-
-      eventSource.onerror = (err) => {
-        // Gracefully close stream when completed or disconnected
-        if (eventSource) {
-          eventSource.close();
-        }
-        if (onError && typeof onError === 'function') {
-          onError(err);
-        }
-      };
-    })
-    .catch((err) => {
-      console.warn('Authentication or EventSource initialization error:', err);
-      if (onError && typeof onError === 'function') {
+      }
+    } catch (err) {
+      if (cancelled || err?.name === "AbortError") return;
+      console.warn("Authentication or SSE stream error:", err);
+      if (onError && typeof onError === "function") {
         onError(err);
       }
-    });
+    }
+  })();
 
   return () => {
     cancelled = true;
-    if (eventSource) {
-      eventSource.close();
+    try {
+      controller.abort();
+    } catch {
+      // ignore
     }
   };
 }

@@ -72,6 +72,8 @@ export const ALL_PROVIDERS = [
     icon: '◈',
     color: '#f87171',
     models: [
+      { id: 'deepseek-chat', name: 'DeepSeek Chat', tag: 'Official' },
+      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' },
       { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
       { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', tag: 'Fast' },
       { id: 'kimi-k3', name: 'Kimi K3' },

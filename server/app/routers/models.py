@@ -41,6 +41,8 @@ AVAILABLE_MODELS: List[ModelInfo] = [
     ModelInfo(id="gpt-codex", name="GPT Codex", provider="OpenAI", description="Code generation & refactoring specialist"),
 
     # DeepSeek & Kimi Family
+    ModelInfo(id="deepseek-chat", name="DeepSeek Chat", provider="DeepSeek", description="Official DeepSeek OpenAI-compatible chat model", recommended=True),
+    ModelInfo(id="deepseek-reasoner", name="DeepSeek Reasoner", provider="DeepSeek", description="Official DeepSeek reasoning model"),
     ModelInfo(id="deepseek-v4-pro", name="DeepSeek V4 Pro", provider="DeepSeek", description="Deep reasoning & mathematical intelligence engine"),
     ModelInfo(id="deepseek-v4-flash", name="DeepSeek V4 Flash", provider="DeepSeek", description="Fast open-weights deep reasoning engine"),
     ModelInfo(id="kimi-k3", name="Kimi K3", provider="Moonshot", description="Long-context Chinese & English reasoning model")

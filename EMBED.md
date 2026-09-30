@@ -12,7 +12,7 @@
 
 | 上游能力 | 信号位置 | 嵌后风险 | 处置 (A–E) | 主路径 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| API cookie + SSE | `client/lib/api.js` | 跨源 iframe 401 / 流断 | C Next rewrite 同源 | 是 | ensure 设 `NEXT_PUBLIC_API_URL=/api/v1` |
+| API auth + SSE | `client/lib/api.js` | 跨站 Guest：Cookie 被拦；EventSource 不能带 Bearer | C rewrite + `NEXT_PUBLIC_API_TOKEN` + fetch SSE | 是 | launcher 注入 `.auth-token`；`subscribeToChatStream` 用 fetch |
 | 模型/Composio 密钥 | Settings + env | 嵌页可填 | A host.config + 上游 Settings | 是 | sync → sidecar-env.json |
 | 图片附件 | upload FormData | 一般可用 | D | 是 | |
 | WORKSPACE_ROOT | gateway workspace.* | 边界需配置 | A 详情路径 Chip | 是 | |
