@@ -94,6 +94,7 @@ export default function Sidebar({
             suppressHydrationWarning={true}
             onClick={onOpenNewBot}
             title="Create New Bot"
+            data-testid="open-dots-create-new-bot"
             className="text-zinc-400 hover:text-white transition p-1 rounded-md hover:bg-[#222226]"
           >
             <FiPlus className="text-lg" />

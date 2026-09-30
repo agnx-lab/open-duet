@@ -7,6 +7,7 @@ import ComputerPanel from './ComputerPanel';
 import Marketplace from './Marketplace';
 import AuditPanel from './AuditPanel';
 import AppSettingsDrawer from './AppSettingsDrawer';
+import NewBotModal from './NewBotModal';
 
 import { 
   fetchBots, 
@@ -24,6 +25,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'computer' | 'marketplace' | 'audit'
   const [messages, setMessages] = useState([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isNewBotOpen, setIsNewBotOpen] = useState(false);
   const [defaultModel, setDefaultModel] = useState('gpt-5-mini');
   const [userName, setUserName] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -75,18 +77,14 @@ export default function Dashboard() {
     }
   };
 
-  const handleCreateNewBot = async () => {
-    const name = prompt('Enter Bot Name:', 'New Assistant');
-    if (!name) return;
-    const role = prompt('Enter Role:', 'General Intelligence');
-    const model = prompt('Enter Model (e.g. gpt-5-mini, claude-3-5-sonnet):', 'gpt-5-mini');
-
+  const handleCreateNewBot = async ({ name, role, model }) => {
     try {
+      const modelId = model || defaultModel || 'gpt-5-mini';
       const newBot = await createBot({
         name,
         role: role || 'AI Assistant',
-        model: model || 'gpt-5-mini',
-        description: `Custom assistant configured to use ${model || 'gpt-5-mini'}.`,
+        model: modelId,
+        description: `Custom assistant configured to use ${modelId}.`,
         avatar: '🤖',
         system_prompt: `You are ${name}, a helpful AI assistant.`
       });
@@ -95,6 +93,7 @@ export default function Dashboard() {
       setActiveTab('chat');
     } catch (err) {
       console.error('Failed to create bot:', err);
+      throw err instanceof Error ? err : new Error(String(err || 'Failed to create bot'));
     }
   };
 
@@ -112,7 +111,7 @@ export default function Dashboard() {
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         onOpenSettings={() => setIsSettingsOpen(!isSettingsOpen)}
-        onOpenNewBot={handleCreateNewBot}
+        onOpenNewBot={() => setIsNewBotOpen(true)}
       />
 
       {/* Main Workspace Display Area */}
@@ -152,6 +151,14 @@ export default function Dashboard() {
           }
         }}
         onProfileUpdate={(name) => setUserName(name || 'You')}
+      />
+
+      {/* 页内新建 Bot：Guest iframe 内不可用 window.prompt */}
+      <NewBotModal
+        isOpen={isNewBotOpen}
+        onClose={() => setIsNewBotOpen(false)}
+        onSubmit={handleCreateNewBot}
+        defaultModel={defaultModel}
       />
     </div>
   );
