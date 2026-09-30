@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
+import shlex
 from typing import Any, Callable, Dict, Optional
+from urllib.parse import urlparse
 
 from app.services.action_gateway import ActionDefinition, ActionGateway, ActionInvocation, action_gateway
 from app.services.computer_provider import (
@@ -10,6 +13,101 @@ from app.services.computer_provider import (
     ComputerProviderError,
     computer_provider,
 )
+
+
+class ComputerCommandError(ValueError):
+    """Raised when an explicit computer chat command is malformed."""
+
+
+_URL_RE = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
+_NAV_INTENT_RE = re.compile(
+    r"(?i)\b(open|visit|navigate|browse|go\s+to|load|打开|访问|导航到|浏览)\b"
+)
+
+
+def _normalize_url(raw: str) -> str:
+    url = (raw or "").strip().rstrip(").,;]\"'")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ComputerCommandError(f"Invalid URL: {raw}")
+    return url
+
+
+def parse_computer_command(prompt: str, *, bot_id: str) -> Optional[ActionInvocation]:
+    """Parse chat text into a computer action (slash or simple NL open-URL).
+
+    Supported forms:
+      /computer start|stop|screenshot
+      /computer navigate <url>
+      /computer terminal <command...>
+      Natural language containing open/visit/navigate/... and an http(s) URL
+    """
+
+    if not isinstance(bot_id, str) or not bot_id.strip():
+        raise ComputerCommandError("Computer commands require a bot id.")
+    text = (prompt or "").strip()
+    if not text:
+        return None
+
+    lower = text.lower()
+    if lower.startswith("/computer"):
+        lines = text.split("\n", 1)
+        try:
+            parts = shlex.split(lines[0])
+        except ValueError as exc:
+            raise ComputerCommandError(f"Invalid computer command: {exc}") from exc
+        if len(parts) < 2 or parts[0].lower() != "/computer":
+            raise ComputerCommandError(
+                "Use /computer start|stop|screenshot|navigate <url>|terminal <command>."
+            )
+        action = parts[1].lower()
+        if action in {"start", "stop", "screenshot"}:
+            if len(parts) != 2:
+                raise ComputerCommandError(f"/computer {action} takes no extra arguments.")
+            return ActionInvocation(
+                name=f"computer.{action}",
+                arguments={"bot_id": bot_id},
+                target={"bot_id": bot_id},
+                preview=f"Run computer {action} for {bot_id}",
+            )
+        if action in {"navigate", "open", "goto"}:
+            if len(parts) != 3:
+                raise ComputerCommandError("Use /computer navigate <url>.")
+            url = _normalize_url(parts[2])
+            return ActionInvocation(
+                name="computer.browser_navigate",
+                arguments={"bot_id": bot_id, "url": url},
+                target={"bot_id": bot_id, "url": url},
+                preview=f"Navigate the computer browser for {bot_id} to {url}",
+            )
+        if action in {"terminal", "exec", "run"}:
+            if len(parts) < 3:
+                raise ComputerCommandError("Use /computer terminal <command>.")
+            command = " ".join(parts[2:])
+            if len(lines) == 2 and lines[1].strip():
+                command = f"{command}\n{lines[1]}".strip()
+            return ActionInvocation(
+                name="computer.terminal_execute",
+                arguments={"bot_id": bot_id, "command": command},
+                target={"bot_id": bot_id},
+                preview=f"Run a terminal command on the computer for {bot_id}",
+                display_arguments={"bot_id": bot_id, "command": command[:120]},
+            )
+        raise ComputerCommandError(
+            "Supported /computer actions: start, stop, screenshot, navigate, terminal."
+        )
+
+    # Thin NL bridge (not a full agent loop): intent word + URL → browser navigate.
+    match = _URL_RE.search(text)
+    if match and _NAV_INTENT_RE.search(text):
+        url = _normalize_url(match.group(0))
+        return ActionInvocation(
+            name="computer.browser_navigate",
+            arguments={"bot_id": bot_id, "url": url},
+            target={"bot_id": bot_id, "url": url},
+            preview=f"Navigate the computer browser for {bot_id} to {url}",
+        )
+    return None
 
 
 def _status_for(call: ActionInvocation, provider: ComputerProvider):
@@ -63,6 +161,9 @@ def register_computer_actions(
 
     async def browser_navigate(call: ActionInvocation) -> Dict[str, Any]:
         status = _status_for(call, target_provider)
+        # 聊天/面板导航前自动起机，避免 stopped 时只能空白失败
+        if status.state != "running":
+            status = await target_provider.start(status.computer_id)
         return await target_provider.browser_navigate(status.computer_id, str(call.arguments.get("url") or ""))
 
     async def terminal_execute(call: ActionInvocation) -> Dict[str, Any]:

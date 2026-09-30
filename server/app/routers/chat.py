@@ -15,6 +15,7 @@ from app.services.action_gateway import (
     action_gateway,
 )
 from app.services.connector_actions import ConnectorCommandError, parse_connector_command
+from app.services.computer_actions import ComputerCommandError, parse_computer_command
 from app.services.workspace_service import (
     WorkspaceToolError,
     parse_workspace_command,
@@ -72,6 +73,7 @@ async def stream_turn(thread_id: str, model: Optional[str] = Query("gpt-5-mini")
         bot_msg_id = f"msg-{uuid.uuid4().hex[:6]}"
         accumulated_text = ""
         tool_context = ""
+        action_completed = False
 
         # Emit turn started
         yield {
@@ -84,9 +86,17 @@ async def stream_turn(thread_id: str, model: Optional[str] = Query("gpt-5-mini")
             action_call = parse_workspace_command(last_user_text)
             if action_call is None:
                 action_call = parse_connector_command(last_user_text)
-        except (WorkspaceToolError, ConnectorCommandError) as exc:
+            if action_call is None:
+                # thread_id == bot_id in this app's chat model
+                action_call = parse_computer_command(last_user_text, bot_id=thread_id)
+        except (WorkspaceToolError, ConnectorCommandError, ComputerCommandError) as exc:
             action_call = None
-            command_tool = "connector" if last_user_text.lower().startswith("/connector") else "workspace"
+            if last_user_text.lower().startswith("/connector"):
+                command_tool = "connector"
+            elif last_user_text.lower().startswith("/computer"):
+                command_tool = "computer"
+            else:
+                command_tool = "workspace"
             tool_context = f"A {command_tool} request was rejected before execution: {exc}"
             yield {
                 "event": "message",
@@ -158,7 +168,12 @@ async def stream_turn(thread_id: str, model: Optional[str] = Query("gpt-5-mini")
                     else:
                         if action_result.status == "completed":
                             result = action_result.result or {}
-                            tool_context = f"Action result ({action_name}): {json.dumps(result)}"
+                            tool_context = (
+                                "A governed computer action already ran this turn. "
+                                "Do not say you cannot browse or control a computer. "
+                                f"Answer the user using this result: {json.dumps(result)}"
+                            )
+                            action_completed = True
                             yield {
                                 "event": "message",
                                 "data": json.dumps({
@@ -205,12 +220,17 @@ async def stream_turn(thread_id: str, model: Optional[str] = Query("gpt-5-mini")
         effective_system_prompt = (
             f"{system_prompt}\n\n{tool_context}" if tool_context else system_prompt
         )
+        # 本轮已跑 computer 工具时，丢掉历史里「我不能上网」的毒回复，只带最后一句用户指令。
+        model_messages = formatted_history
+        if action_completed and formatted_history:
+            model_messages = formatted_history[-1:]
+
 
         # Stream content from inference adapter
         try:
             async for event in provider_service.stream_chat_completion(
                 model=selected_model,
-                messages=formatted_history,
+                messages=model_messages,
                 system_prompt=effective_system_prompt
             ):
                 if event["type"] == "content.delta":

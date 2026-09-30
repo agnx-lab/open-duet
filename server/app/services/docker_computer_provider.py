@@ -174,6 +174,11 @@ class DockerComputerProvider:
 
     async def _launch(self, record: _RuntimeRecord) -> None:
         record.workspace.mkdir(parents=True, exist_ok=True)
+        # sidecar 进程重启后内存里没有 container_id，同名容器常还在 → docker run 撞名。
+        try:
+            await self._docker(["rm", "-f", self._container_name(record)])
+        except ComputerProviderError:
+            pass
         args = [
             "run",
             "-d",

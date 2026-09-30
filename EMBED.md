@@ -16,7 +16,7 @@
 | 模型/Composio 密钥 | Settings + env | 嵌页可填 | A host.config + 上游 Settings | 是 | sync → sidecar-env.json |
 | 图片附件 | upload FormData | 一般可用 | D | 是 | |
 | WORKSPACE_ROOT | gateway workspace.* | 边界需配置 | A 详情路径 Chip | 是 | |
-| Computer Docker | COMPUTER_PROVIDER | 非硬沙箱 | E→A W3 开关；默认 fake | 否（一期） | 需本机 Docker + runtime 镜像 |
+| Computer Docker | COMPUTER_PROVIDER | 非硬沙箱 | **A** docker；聊天 open URL / `/computer navigate` | 是 | 需 Docker 镜像；审批后控沙箱浏览器 |
 | Composio OAuth | connectors authorize | iframe 弹窗/跳转 | E→D 失败可见 | 次 | |
 | 语音输入 | Web Speech | 视 Guest 分区 | D | 否 | |
 | 系统通知 / 外开窗 | 无强依赖 | — | D 不接 | 否 | |
