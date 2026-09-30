@@ -1,0 +1,42 @@
+{
+  "id": "open-dots",
+  "name": "Open Dots",
+  "version": "0.1.0",
+  "description": "Agnx 外置：Open Dots 整仓 + FastAPI/Next sidecar + Guest",
+  "engines": {
+    "agnx": ">=1.0.0"
+  },
+  "main": "./dist/index.js",
+  "icon": "./assets/open-dots-icon.svg",
+  "platforms": {
+    "desktop": "supported",
+    "web": "partial",
+    "mobile": "unsupported"
+  },
+  "sidecar": {
+    "supervised": true,
+    "ensureTool": ".agnx/tools/ensure-open-dots.mjs",
+    "stateFile": "open-dots.json",
+    "defaultPort": 3088,
+    "lifecycle": "lazy"
+  },
+  "guest": {
+    "kind": "web",
+    "auth": "none",
+    "preferStrategy": "auto"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "open-dots.open",
+        "title": "Open Dots"
+      }
+    ],
+    "panels": [
+      {
+        "id": "open-dots.main",
+        "title": "Open Dots"
+      }
+    ]
+  }
+}
