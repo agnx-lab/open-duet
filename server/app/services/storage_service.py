@@ -13,10 +13,13 @@ from app.services.database import Database
 from app.services.secret_store import SecretStore, SecretStoreError
 
 
-SECRET_KEYS = {"model_api_key", "composio_api_key", "composio_key"}
+SECRET_KEYS = {"model_api_key", "model_api_headers", "composio_api_key", "composio_key"}
 SETTING_KEYS = {
     "model_api_key",
     "model_api_base_url",
+    "model_api_wire_api",
+    "model_api_headers",
+    "model_ids",
     "composio_api_key",
     "composio_key",
     "default_model",
@@ -55,6 +58,9 @@ class StorageService:
         return {
             "model_api_key": settings.MODEL_API_KEY,
             "model_api_base_url": settings.MODEL_API_BASE_URL,
+            "model_api_wire_api": "prediction",
+            "model_api_headers": {},
+            "model_ids": [],
             "composio_api_key": settings.COMPOSIO_API_KEY,
             "default_model": settings.DEFAULT_MODEL,
             "theme": "dark",
@@ -263,6 +269,14 @@ class StorageService:
                     (str(bot["id"]), self.owner_id, json.dumps(bot)),
                 )
 
+    def delete_bot(self, bot_id: str) -> None:
+        """Delete one bot without rewriting a stale snapshot of other bots."""
+        with self.database.connect() as connection:
+            connection.execute(
+                "DELETE FROM bots WHERE owner_id = ? AND id = ?",
+                (self.owner_id, bot_id),
+            )
+
     def get_messages(self, thread_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self.database.connect() as connection:
             if thread_id:
@@ -313,11 +327,12 @@ class StorageService:
             key, raw_value, is_secret = row
             if is_secret:
                 try:
-                    values[key] = self.secret_store.decrypt(raw_value)
+                    decrypted = self.secret_store.decrypt(raw_value)
+                    values[key] = json.loads(decrypted) if key == "model_api_headers" else decrypted
                 except SecretStoreError:
                     # A rotated or missing key should not prevent the app from
                     # starting. The user can replace the unavailable secret.
-                    values[key] = ""
+                    values[key] = {} if key == "model_api_headers" else ""
                 continue
             decoded = self._decode_payload(raw_value)
             values[key] = raw_value if decoded is None else decoded
@@ -327,20 +342,26 @@ class StorageService:
         values = self.get_settings()
         for key in SECRET_KEYS:
             values[f"{key}_configured"] = bool(values.get(key))
-            values[key] = ""
+            values[key] = {} if key == "model_api_headers" else ""
         return values
 
     def save_settings(self, data: Dict[str, Any]):
         if not isinstance(data, dict):
             return
         with self.database.connect() as connection:
+            if data.get("clear_model_api_headers"):
+                connection.execute(
+                    "DELETE FROM settings WHERE owner_id = ? AND key = 'model_api_headers'",
+                    (self.owner_id,),
+                )
             for key in SETTING_KEYS.intersection(data):
                 value = data[key]
                 if key in SECRET_KEYS:
                     # An empty write is the UI's "keep existing value" signal.
-                    if value is None or str(value).strip() == "":
+                    if value is None or value == {} or str(value).strip() == "":
                         continue
-                    stored_value = self.secret_store.encrypt(str(value))
+                    secret_value = json.dumps(value) if key == "model_api_headers" else str(value)
+                    stored_value = self.secret_store.encrypt(secret_value)
                     is_secret = 1
                 else:
                     stored_value = json.dumps(value)

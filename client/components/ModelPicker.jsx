@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { FiChevronDown, FiCheck } from 'react-icons/fi';
 
 // ─── Shared model catalog (single source of truth) ─────────────────────────
@@ -82,8 +82,22 @@ export const ALL_PROVIDERS = [
 ];
 
 // Helper — find provider + model object by model ID
-export function findModel(modelId) {
-  for (const provider of ALL_PROVIDERS) {
+export function getProviders(models) {
+  if (!models?.length) return ALL_PROVIDERS;
+  const groups = new Map();
+  for (const model of models) {
+    if (model.is_available === false) continue;
+    const name = model.provider || 'Configured provider';
+    if (!groups.has(name)) {
+      groups.set(name, { id: name, name, icon: '✦', color: '#a78bfa', models: [] });
+    }
+    groups.get(name).models.push({ ...model, tag: model.recommended ? 'Recommended' : undefined });
+  }
+  return groups.size ? [...groups.values()] : ALL_PROVIDERS;
+}
+
+export function findModel(modelId, providers = ALL_PROVIDERS) {
+  for (const provider of providers) {
     const found = provider.models.find((m) => m.id === modelId);
     if (found) return { provider, model: found };
   }
@@ -91,16 +105,17 @@ export function findModel(modelId) {
 }
 
 // ─── ModelPicker (chat header) ─────────────────────────────────────────────
-export default function ModelPicker({ currentModel, onSelectModel }) {
+export default function ModelPicker({ currentModel, onSelectModel, models }) {
+  const providers = useMemo(() => getProviders(models), [models]);
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('assistant');
   const dropdownRef = useRef(null);
 
   // Auto-switch provider tab to match the currently selected model
   useEffect(() => {
-    const found = findModel(currentModel);
+    const found = findModel(currentModel, providers);
     if (found) setActiveTab(found.provider.id);
-  }, [currentModel]);
+  }, [currentModel, providers]);
 
   useEffect(() => {
     function handleClickOutside(event) {
@@ -112,8 +127,8 @@ export default function ModelPicker({ currentModel, onSelectModel }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const activeProvider = ALL_PROVIDERS.find((p) => p.id === activeTab) || ALL_PROVIDERS[0];
-  const currentInfo = findModel(currentModel);
+  const activeProvider = providers.find((p) => p.id === activeTab) || providers[0];
+  const currentInfo = findModel(currentModel, providers);
   const displayName = currentInfo?.model?.name || currentModel || 'Select Model';
   const displayIcon = currentInfo?.provider?.icon || 'Ø';
   const displayColor = currentInfo?.provider?.color || '#a78bfa';
@@ -142,7 +157,7 @@ export default function ModelPicker({ currentModel, onSelectModel }) {
         >
           {/* Left Provider Rail */}
           <div className="w-12 bg-[#101013] border-r border-[#26262b] flex flex-col items-center py-3 gap-1.5 flex-shrink-0">
-            {ALL_PROVIDERS.map((tab) => {
+            {providers.map((tab) => {
               const isSelected = activeTab === tab.id;
               return (
                 <button

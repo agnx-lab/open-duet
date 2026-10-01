@@ -5,6 +5,7 @@ class Settings:
     MODEL_API_KEY: str = os.getenv("MODEL_API_KEY", "")
     MODEL_API_BASE_URL: str = os.getenv("MODEL_API_BASE_URL", "").rstrip("/")
     COMPOSIO_API_KEY: str = os.getenv("COMPOSIO_API_KEY", "")
+    YDC_API_KEY: str = os.getenv("YDC_API_KEY", "").strip()
     DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "gpt-5-mini")
     DATA_DIR: Path = Path(
         os.getenv("DATA_DIR", str(Path.home() / ".open-dots"))
@@ -37,10 +38,7 @@ class Settings:
     )
     COMPUTER_DOCKER_RUNTIME_PORT: int = int(os.getenv("COMPUTER_DOCKER_RUNTIME_PORT", "3000"))
     COMPUTER_DOCKER_SECCOMP_PROFILE: Path = Path(
-        os.getenv(
-            "COMPUTER_DOCKER_SECCOMP_PROFILE",
-            str(Path(__file__).resolve().parents[2] / "runtime" / "seccomp_profile.json"),
-        )
+        os.getenv("COMPUTER_DOCKER_SECCOMP_PROFILE", "/nonexistent/open-dots-seccomp.json")
     ).expanduser().resolve()
     COMPUTER_REMOTE_BASE_URL: str = os.getenv("COMPUTER_REMOTE_BASE_URL", "").rstrip("/")
     COMPUTER_REMOTE_API_KEY: str = os.getenv("COMPUTER_REMOTE_API_KEY", "").strip()

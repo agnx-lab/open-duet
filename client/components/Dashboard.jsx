@@ -18,7 +18,7 @@ import {
   updateBot 
 } from '../lib/api';
 
-export default function Dashboard() {
+export default function Dashboard({ onLogout }) {
   const [bots, setBots] = useState([]);
   const [models, setModels] = useState([]);
   const [activeBotId, setActiveBotId] = useState('');
@@ -68,15 +68,12 @@ export default function Dashboard() {
     try {
       const updated = await updateBot(botId, { model: newModel });
       setBots((prev) => prev.map((b) => (b.id === botId ? updated : b)));
-      // Keep defaultModel in sync whenever the active bot's model changes
-      if (botId === activeBotId) {
-        setDefaultModel(newModel);
-      }
     } catch (err) {
       console.error('Failed to update bot model:', err);
     }
   };
 
+  // Guest iframe 内 window.prompt 不可用，由 NewBotModal 传入字段。
   const handleCreateNewBot = async ({ name, role, model }) => {
     try {
       const modelId = model || defaultModel || 'gpt-5-mini';
@@ -101,6 +98,7 @@ export default function Dashboard() {
     <div className="flex h-screen w-screen overflow-hidden bg-[#09090b] text-zinc-100 font-sans">
       {/* Sidebar Navigation & Bot Roster */}
       <Sidebar
+        onLogout={onLogout}
         bots={bots}
         activeBotId={activeBotId}
         userName={userName}
@@ -141,14 +139,13 @@ export default function Dashboard() {
 
       {/* Right Side App Settings Drawer Panel */}
       <AppSettingsDrawer
+        models={models}
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         currentModel={defaultModel}
-        onUpdateDefaultModel={(newModel) => {
+        onUpdateDefaultModel={async (newModel) => {
           setDefaultModel(newModel);
-          if (activeBotId) {
-            handleUpdateBotModel(activeBotId, newModel);
-          }
+          setModels(await fetchModels());
         }}
         onProfileUpdate={(name) => setUserName(name || 'You')}
       />

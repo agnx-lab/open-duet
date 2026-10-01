@@ -157,7 +157,7 @@ export default function ComputerPanel({ bot, onBackToChat }) {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {isActive ? (
+          {state === 'running' ? (
             <button
               onClick={() => runAction('pause', pauseComputer)}
               disabled={actionBusy}
@@ -171,7 +171,7 @@ export default function ComputerPanel({ bot, onBackToChat }) {
               disabled={actionBusy || state === 'starting' || state === 'resetting'}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-emerald-500/20 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/30 disabled:opacity-50 transition"
             >
-              <FiPlay /> {loadingAction === 'start' ? 'Starting…' : 'Start'}
+              <FiPlay /> {loadingAction === 'start' ? (state === 'paused' ? 'Resuming…' : 'Starting…') : (state === 'paused' ? 'Resume' : 'Start')}
             </button>
           )}
           <button

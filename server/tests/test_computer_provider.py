@@ -1,20 +1,25 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Dict, Optional
+from unittest.mock import patch
 
 import httpx
 
 from app.services.action_gateway import ActionGateway, ActionInvocation
+from app.services.approval_broker import ApprovalBroker
 from app.services.computer_actions import register_computer_actions
 from app.services.computer_provider import FakeComputerProvider
 from app.services.workspace_service import WorkspaceService
 
 try:
     from app.main import app
+    from app.services.auth_service import auth_service
     from app.services.storage_service import storage_service
 except ModuleNotFoundError:
     app = None
+    auth_service = None
     storage_service = None
 
 
@@ -163,11 +168,64 @@ class ComputerGatewayTests(unittest.IsolatedAsyncioTestCase):
 
 class ComputerRouterTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipIf(app is None, "FastAPI dependencies are not installed")
+    async def test_cancelled_terminal_request_cannot_be_executed_again(self):
+        bot_id = storage_service.get_bots()[0]["id"]
+        provider = FakeComputerProvider()
+        broker = ApprovalBroker()
+        audit = RecordingAudit()
+        gateway = ActionGateway(approvals=broker, audit=audit)
+        register_computer_actions(gateway, provider)
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = []
+
+        async def terminal_execute(computer_id, command):
+            calls.append(command)
+            started.set()
+            await release.wait()
+            return {"accepted": True}
+
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 43124))
+        with (
+            patch("app.routers.computers.action_gateway", gateway),
+            patch("app.routers.computers.computer_provider", provider),
+            patch("app.routers.approvals.approval_broker", broker),
+            patch.object(provider, "terminal_execute", terminal_execute),
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+                login = await client.post("/api/v1/auth/login", json={"token": auth_service.token})
+                self.assertEqual(login.status_code, 200)
+                action = await client.post(
+                    f"/api/v1/computers/{bot_id}/actions",
+                    json={"action": "terminal_execute", "arguments": {"command": "echo test"}},
+                )
+                self.assertEqual(action.status_code, 202)
+                request_id = action.json()["request"]["request_id"]
+                decision = await client.post(
+                    "/api/v1/approvals/respond",
+                    json={"request_id": request_id, "action": "allow"},
+                )
+                self.assertEqual(decision.status_code, 200)
+                url = f"/api/v1/computers/{bot_id}/actions/{request_id}/execute"
+                task = asyncio.create_task(client.post(url))
+                try:
+                    await asyncio.wait_for(started.wait(), timeout=5)
+                finally:
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                release.set()
+                retry = await client.post(url)
+                self.assertEqual(retry.status_code, 404)
+                self.assertEqual(calls, ["echo test"])
+                self.assertEqual(audit.events[-1]["event"], "action.failed")
+
+    @unittest.skipIf(app is None, "FastAPI dependencies are not installed")
     async def test_authenticated_lifecycle_screen_and_approval_routes(self):
         bot_id = storage_service.get_bots()[0]["id"]
         transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 43124))
         async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
-            session = await client.get("/api/v1/auth/session")
+            session = await client.post("/api/v1/auth/login", json={"token": auth_service.token})
             self.assertEqual(session.status_code, 200)
 
             initial = await client.get(f"/api/v1/computers/{bot_id}")

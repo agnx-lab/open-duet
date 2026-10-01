@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from typing import List
 from app.schemas.contracts import ModelInfo
+from app.services.storage_service import storage_service
 
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
 
@@ -50,4 +51,12 @@ AVAILABLE_MODELS: List[ModelInfo] = [
 
 @router.get("", response_model=List[ModelInfo])
 async def list_models():
+    configured = storage_service.get_settings()
+    if configured.get("model_ids"):
+        return [
+            ModelInfo(id=model_id, name=model_id, provider="Configured provider",
+                      description="Model available from the configured inference service",
+                      recommended=model_id == configured.get("default_model"))
+            for model_id in configured["model_ids"]
+        ]
     return AVAILABLE_MODELS

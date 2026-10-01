@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState } from 'react';
-import { FiSearch, FiPlus, FiSettings, FiActivity } from 'react-icons/fi';
+import { FiSearch, FiPlus, FiSettings, FiActivity, FiLogOut } from 'react-icons/fi';
 import MascotAvatar from './MascotAvatar';
 
 export default function Sidebar({
+  onLogout,
   bots,
   activeBotId,
   userName,
@@ -186,6 +187,10 @@ export default function Sidebar({
         >
           <FiActivity className="text-sm text-cyan-400" />
           <span>Audit trail</span>
+        </button>
+
+        <button onClick={onLogout} className="w-full flex items-center gap-2 px-2 py-1 rounded-lg text-xs text-zinc-300 hover:text-white hover:bg-[#1e1e22]">
+          <FiLogOut /> Sign out
         </button>
 
         {/* Dynamic Issue Alert Badge vs You Profile Row */}

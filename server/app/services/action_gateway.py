@@ -6,6 +6,7 @@ always rejected.
 """
 
 from dataclasses import dataclass
+import asyncio
 from datetime import datetime, timezone
 import inspect
 import uuid
@@ -152,6 +153,8 @@ class ActionGateway:
         }
         self._pending: Dict[str, Tuple[ActionRequest, Any]] = {}
         self._decisions: Dict[str, str] = {}
+        self._decision_locks: Dict[str, asyncio.Lock] = {}
+        self._execution_locks: Dict[str, asyncio.Lock] = {}
 
     def register_action(
         self,
@@ -297,27 +300,29 @@ class ActionGateway:
         return request, approval
 
     async def wait_for_decision(self, request: ActionRequest) -> str:
+        if request.request_id not in self._pending:
+            return "expired"
         if not request.requires_approval:
             return "allow"
-        if request.request_id in self._decisions:
-            return self._decisions[request.request_id]
-        if request.request_id not in self._pending:
-            self._audit_action("action.expired", request, state="expired")
-            self._decisions[request.request_id] = "expired"
-            return "expired"
+        lock = self._decision_locks.setdefault(request.request_id, asyncio.Lock())
+        async with lock:
+            if request.request_id in self._decisions:
+                return self._decisions[request.request_id]
+            if request.request_id not in self._pending:
+                return "expired"
 
-        decision = await self.approvals.wait(request.request_id)
-        self._decisions[request.request_id] = decision
-        if decision == "allow":
-            self._audit_action("action.approved", request, decision=decision, state="approved")
-        elif decision == "deny":
-            self._audit_action("action.denied", request, decision=decision, state="denied")
-        else:
-            self._audit_action("action.expired", request, decision=decision, state="expired")
-        if decision != "allow":
-            self._pending.pop(request.request_id, None)
-            self._decisions.pop(request.request_id, None)
-        return decision
+            decision = await self.approvals.wait(request.request_id)
+            self._decisions[request.request_id] = decision
+            if decision == "allow":
+                self._audit_action("action.approved", request, decision=decision, state="approved")
+            elif decision == "deny":
+                self._audit_action("action.denied", request, decision=decision, state="denied")
+            else:
+                self._audit_action("action.expired", request, decision=decision, state="expired")
+            if decision != "allow":
+                self._pending.pop(request.request_id, None)
+                self._decisions.pop(request.request_id, None)
+            return decision
 
     def get_pending_request(self, request_id: str) -> Optional[ActionRequest]:
         """Return a pending request for an authenticated continuation endpoint."""
@@ -347,6 +352,16 @@ class ActionGateway:
         return redact_sensitive(summary)
 
     async def execute(self, request: ActionRequest) -> ActionResult:
+        lock = self._execution_locks.setdefault(request.request_id, asyncio.Lock())
+        try:
+            async with lock:
+                return await self._execute_once(request)
+        finally:
+            if request.request_id not in self._pending:
+                self._execution_locks.pop(request.request_id, None)
+                self._decision_locks.pop(request.request_id, None)
+
+    async def _execute_once(self, request: ActionRequest) -> ActionResult:
         pending = self._pending.get(request.request_id)
         if pending is None:
             raise ActionGatewayError("Action request is no longer available for execution.")
@@ -354,12 +369,15 @@ class ActionGateway:
         if request.requires_approval and decision != "allow":
             raise ActionGatewayError("Action must be approved before execution.")
 
+        # Consume the approval before calling an adapter: cancellation while
+        # awaiting its response does not prove the remote side effect stopped.
+        # Neither a retry nor a queued caller may dispatch this action again.
+        self._pending.pop(request.request_id)
+        self._decisions.pop(request.request_id, None)
         call = pending[1]
         executor = self.executors.get(f"{request.tool}.{request.action}")
         if executor is None:
             self._audit_action("action.failed", request, state="failed", error="Action executor is not registered.")
-            self._pending.pop(request.request_id, None)
-            self._decisions.pop(request.request_id, None)
             return ActionResult(
                 request_id=request.request_id,
                 status="failed",
@@ -380,14 +398,21 @@ class ActionGateway:
                 state="completed",
                 result_summary=self._result_summary(result),
             )
-            self._pending.pop(request.request_id, None)
-            self._decisions.pop(request.request_id, None)
             return ActionResult(
                 request_id=request.request_id,
                 status="completed",
                 result=result,
                 created_at=_now(),
             )
+        except asyncio.CancelledError:
+            self._audit_action(
+                "action.failed",
+                request,
+                state="failed",
+                error="Action execution was cancelled; the remote outcome is unknown. "
+                "Check the target before requesting a new action.",
+            )
+            raise
         except WorkspaceToolError as exc:
             error = str(exc)
         except Exception as exc:  # Keep the lifecycle auditable for adapter failures.
@@ -395,8 +420,6 @@ class ActionGateway:
 
         safe_error = str(redact_sensitive(error))
         self._audit_action("action.failed", request, state="failed", error=safe_error)
-        self._pending.pop(request.request_id, None)
-        self._decisions.pop(request.request_id, None)
         return ActionResult(
             request_id=request.request_id,
             status="failed",

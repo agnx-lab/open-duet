@@ -9,6 +9,7 @@ id; callers continue to use the provider-neutral computer contract.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
@@ -106,6 +107,10 @@ class DockerComputerProvider:
         record = self._runtimes.get(computer_id)
         return record.status if record else self._new_status(bot_id)
 
+    async def reconcile(self, bot_id: str) -> ComputerStatus:
+        record = await self._recover_container(computer_id_for_bot(bot_id), force=True)
+        return record.status if record else self._new_status(bot_id)
+
     def get_or_create(self, bot_id: str) -> ComputerStatus:
         computer_id = computer_id_for_bot(bot_id)
         existing = self._runtimes.get(computer_id)
@@ -169,6 +174,36 @@ class DockerComputerProvider:
             timeout if timeout is not None else self.command_timeout,
         )
 
+    async def _recover_container(self, computer_id: str, *, force: bool = False) -> Optional[_RuntimeRecord]:
+        record = self._runtimes.get(computer_id)
+        if record and (record.container_id or not force):
+            return record
+        name = f"open-dots-computer-{computer_id[-70:]}"
+        try:
+            raw = await self._docker(["inspect", "--format", "{{json .}}", name])
+            info = json.loads(raw)
+            labels = info.get("Config", {}).get("Labels", {}) or {}
+            env = info.get("Config", {}).get("Env", []) or []
+            values = dict(item.split("=", 1) for item in env if "=" in item)
+            token = values.get("COMPUTER_TOKEN")
+            bot_id = labels.get("open-dots.bot-id")
+            if not token or not bot_id:
+                return record
+            state_info = info.get("State", {}) or {}
+            paused = bool(state_info.get("Paused"))
+            running = bool(state_info.get("Running"))
+            status = self._new_status(bot_id, generation=1)
+            status.state = "paused" if paused else "running" if running else "stopped"
+            status.health = "healthy" if running else "unknown"
+            port_data = ((info.get("NetworkSettings", {}).get("Ports", {}) or {}).get(f"{self.runtime_port}/tcp") or [])
+            port = int(port_data[0]["HostPort"]) if port_data else None
+            workspace = (self.workspace_root / computer_id).resolve()
+            record = _RuntimeRecord(status, token, workspace, info.get("Id"), port)
+            self._runtimes[computer_id] = record
+            return record
+        except (ComputerProviderError, ValueError, KeyError, TypeError, IndexError):
+            return record
+
     def _container_name(self, record: _RuntimeRecord) -> str:
         return f"open-dots-computer-{record.status.computer_id[-70:]}"
 
@@ -223,6 +258,8 @@ class DockerComputerProvider:
             f"PORT={self.runtime_port}",
             "--env",
             "WORKSPACE=/workspace",
+            "--env",
+            f"COMPUTER_COMMAND_TIMEOUT={int(self.command_timeout * 1000)}",
             self.image,
         ]
         if self.seccomp_profile.is_file():
@@ -266,7 +303,7 @@ class DockerComputerProvider:
         url = f"http://127.0.0.1:{record.port}{route}"
         try:
             async with httpx.AsyncClient(
-                timeout=max(2.0, min(self.command_timeout, 60.0)),
+                timeout=max(2.0, self.command_timeout + 5.0),
                 headers={"x-computer-token": record.token},
             ) as client:
                 response = await client.request(method, url, json=payload)
@@ -300,6 +337,7 @@ class DockerComputerProvider:
         return self.get_or_create(bot_id)
 
     async def start(self, computer_id: str) -> ComputerStatus:
+        await self._recover_container(computer_id, force=True)
         async with self._lock:
             record = self._record_for(computer_id)
             status = record.status
@@ -334,6 +372,7 @@ class DockerComputerProvider:
             return self._touch(status, "start")
 
     async def stop(self, computer_id: str) -> ComputerStatus:
+        await self._recover_container(computer_id, force=True)
         async with self._lock:
             record = self._record_for(computer_id)
             await self._remove_container(record)
@@ -344,6 +383,7 @@ class DockerComputerProvider:
             return self._touch(status, "stop")
 
     async def pause(self, computer_id: str) -> ComputerStatus:
+        await self._recover_container(computer_id, force=True)
         async with self._lock:
             record = self._active_record(computer_id)
             if record.status.state == "paused":
@@ -354,6 +394,7 @@ class DockerComputerProvider:
             return self._touch(record.status, "pause")
 
     async def reset(self, computer_id: str) -> ComputerStatus:
+        await self._recover_container(computer_id, force=True)
         async with self._lock:
             record = self._record_for(computer_id)
             await self._remove_container(record)
@@ -367,6 +408,7 @@ class DockerComputerProvider:
             return self._touch(status, "reset")
 
     async def health(self, computer_id: str) -> ComputerStatus:
+        await self._recover_container(computer_id, force=True)
         record = self._record_for(computer_id)
         status = record.status
         if status.state not in {"running", "paused"} or not record.container_id:
@@ -382,6 +424,7 @@ class DockerComputerProvider:
         return self._touch(status, "health")
 
     async def browser_navigate(self, computer_id: str, url: str) -> Dict[str, Any]:
+        await self._recover_container(computer_id, force=True)
         record = self._active_record(computer_id)
         if not isinstance(url, str) or len(url.strip()) > 2048:
             raise ComputerProviderError("A browser URL is required and must be at most 2048 characters.")
@@ -394,6 +437,7 @@ class DockerComputerProvider:
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 
     async def terminal_execute(self, computer_id: str, command: str) -> Dict[str, Any]:
+        await self._recover_container(computer_id, force=True)
         record = self._active_record(computer_id)
         if not isinstance(command, str) or not command.strip():
             raise ComputerProviderError("A terminal command is required.")
@@ -404,6 +448,7 @@ class DockerComputerProvider:
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 
     async def files_list(self, computer_id: str, path: str = "/workspace") -> Dict[str, Any]:
+        await self._recover_container(computer_id, force=True)
         record = self._active_record(computer_id)
         if not isinstance(path, str) or len(path) > 512 or not path.strip().startswith("/"):
             raise ComputerProviderError("Computer file paths must be absolute and at most 512 characters.")
@@ -412,6 +457,7 @@ class DockerComputerProvider:
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 
     async def screenshot(self, computer_id: str) -> Dict[str, Any]:
+        await self._recover_container(computer_id, force=True)
         record = self._record_for(computer_id)
         if record.status.state not in {"running", "paused"}:
             return {
@@ -434,6 +480,7 @@ class DockerComputerProvider:
         return {"computer_id": computer_id, "provider": self.provider_name, "available": True, **result}
 
     async def send_input(self, computer_id: str, event: Dict[str, Any]) -> Dict[str, Any]:
+        await self._recover_container(computer_id, force=True)
         record = self._active_record(computer_id)
         if not isinstance(event, dict):
             raise ComputerProviderError("Computer input must be a JSON object.")
@@ -442,8 +489,18 @@ class DockerComputerProvider:
         return {"computer_id": computer_id, "provider": self.provider_name, **result}
 
     async def cleanup(self, computer_id: str) -> Dict[str, Any]:
+        await self._recover_container(computer_id, force=True)
         async with self._lock:
-            record = self._record_for(computer_id)
+            record = self._runtimes.get(computer_id)
+            if record is None:
+                return {
+                    "computer_id": computer_id,
+                    "bot_id": computer_id.removeprefix("computer-"),
+                    "provider": self.provider_name,
+                    "state": "cleaned",
+                    "generation": 0,
+                    "workspace_preserved": True,
+                }
             await self._remove_container(record)
             self._runtimes.pop(computer_id, None)
             return {

@@ -12,6 +12,7 @@ const workspace = path.resolve(process.env.WORKSPACE || '/workspace');
 const computerId = process.env.COMPUTER_ID || 'computer-runtime';
 const width = Number(process.env.VIEWPORT_WIDTH || 1280);
 const height = Number(process.env.VIEWPORT_HEIGHT || 720);
+const commandTimeout = Number(process.env.COMPUTER_COMMAND_TIMEOUT || 30000);
 
 let browser;
 let context;
@@ -95,7 +96,7 @@ async function executeCommand(command) {
   try {
     const result = await execFileAsync('/bin/sh', ['-lc', command], {
       cwd: workspace,
-      timeout: 30000,
+      timeout: commandTimeout,
       maxBuffer: 1024 * 1024,
       env: {
         PATH: process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
@@ -135,7 +136,7 @@ async function handle(request, response) {
     const result = await enqueue(async () => {
       if (request.method === 'POST' && request.url === '/navigate') {
         const url = assertHttpUrl(body.url);
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: commandTimeout });
         return { operation: 'browser.navigate', url: page.url(), title: await page.title() };
       }
 

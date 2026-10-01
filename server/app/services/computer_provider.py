@@ -364,7 +364,11 @@ def build_computer_provider() -> ComputerProvider:
         from app.services.remote_computer_provider import RemoteComputerProvider
 
         return RemoteComputerProvider()
-    return FakeComputerProvider()
+    if settings.COMPUTER_PROVIDER == "fake":
+        return FakeComputerProvider()
+    raise ValueError(
+        f"Unknown COMPUTER_PROVIDER {settings.COMPUTER_PROVIDER!r}; choose fake, docker, or remote."
+    )
 
 
 computer_provider = build_computer_provider()

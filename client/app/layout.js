@@ -1,8 +1,13 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'Open Dots — Open-Source Alternative to OpenAI Dots',
-  description: 'Open-source alternative to OpenAI Dots: a self-hosted AI workspace for chat, tools, approvals, connectors, and computer tasks.',
+  title: 'Open Dots — Open-Source Personal AI Agent Workspace',
+  description: 'A self-hosted, MIT-licensed personal AI agent workspace. Explore an open-source alternative to OpenAI Dots, Meta Muse, Grok Bot, Instinct, Manus Cue, Claude Cowork, and ChatGPT agent.',
+  openGraph: {
+    title: 'Open Dots — Open-Source Personal AI Agent Workspace',
+    description: 'Self-hostable AI chat, connectors, computer tasks, and approval-gated actions.',
+    type: 'website',
+  },
 };
 
 export default function RootLayout({ children }) {

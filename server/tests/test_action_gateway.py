@@ -1,3 +1,4 @@
+import asyncio
 import json
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from typing import Any, Dict, Optional
 from app.services.action_gateway import (
     ActionDefinition,
     ActionGateway,
+    ActionGatewayError,
     ActionInvocation,
     ActionPolicyError,
 )
@@ -63,6 +65,124 @@ class ActionGatewayTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def open_async_action(self, executor, requires_approval=True):
+        self.gateway.register_action(
+            ActionDefinition(
+                name="computer.terminal_execute",
+                tool="computer",
+                action="terminal_execute",
+                intent="Run a terminal command.",
+                risk="write",
+                requires_approval=requires_approval,
+            ),
+            executor,
+        )
+        request, _ = self.gateway.open(
+            "thread-test",
+            "bot-test",
+            ActionInvocation(
+                name="computer.terminal_execute",
+                arguments={"command": "echo test"},
+                target={"bot_id": "bot-test"},
+                preview="Run a terminal command",
+            ),
+        )
+        return request
+
+    async def test_cancelled_execution_cannot_replay_an_approved_action(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = []
+
+        async def executor(call):
+            # A remote service may accept a command before its response arrives.
+            calls.append(call)
+            started.set()
+            await release.wait()
+            return {"accepted": True}
+
+        request = self.open_async_action(executor)
+        await self.gateway.wait_for_decision(request)
+        task = asyncio.create_task(self.gateway.execute(request))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        release.set()
+        with self.assertRaises(ActionGatewayError):
+            await self.gateway.execute(request)
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(self.gateway.get_pending_request(request.request_id))
+        self.assertEqual(await self.gateway.wait_for_decision(request), "expired")
+        self.assertEqual(self.audit.events[-1]["event"], "action.failed")
+        self.assertIn("unknown", self.audit.events[-1]["error"].lower())
+
+    async def test_queued_execution_cannot_replay_after_cancellation(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = []
+
+        async def executor(call):
+            calls.append(call)
+            started.set()
+            await release.wait()
+            return {"accepted": True}
+
+        request = self.open_async_action(executor)
+        await self.gateway.wait_for_decision(request)
+        first = asyncio.create_task(self.gateway.execute(request))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        second = asyncio.create_task(self.gateway.execute(request))
+        await asyncio.sleep(0)
+        first.cancel()
+        release.set()
+        results = await asyncio.gather(first, second, return_exceptions=True)
+        self.assertIsInstance(results[0], asyncio.CancelledError)
+        self.assertIsInstance(results[1], ActionGatewayError)
+        self.assertEqual(len(calls), 1)
+
+    async def test_concurrent_execution_runs_an_approved_action_only_once(self):
+        calls = []
+
+        async def executor(call):
+            calls.append(call)
+            await asyncio.sleep(0)
+            return {"accepted": True}
+
+        request = self.open_async_action(executor)
+        await self.gateway.wait_for_decision(request)
+        results = await asyncio.gather(
+            self.gateway.execute(request),
+            self.gateway.execute(request),
+            return_exceptions=True,
+        )
+        self.assertEqual(results[0].status, "completed")
+        self.assertIsInstance(results[1], ActionGatewayError)
+        self.assertEqual(len(calls), 1)
+
+    async def test_unapproved_execution_does_not_consume_request(self):
+        request = self.open_async_action(lambda call: {"accepted": True})
+        with self.assertRaisesRegex(ActionGatewayError, "approved"):
+            await self.gateway.execute(request)
+        self.assertIsNotNone(self.gateway.get_pending_request(request.request_id))
+        await self.gateway.wait_for_decision(request)
+        self.assertEqual((await self.gateway.execute(request)).status, "completed")
+
+    async def test_failed_execution_cannot_be_replayed(self):
+        calls = []
+
+        async def executor(call):
+            calls.append(call)
+            raise RuntimeError("Provider failed")
+
+        request = self.open_async_action(executor)
+        await self.gateway.wait_for_decision(request)
+        self.assertEqual((await self.gateway.execute(request)).status, "failed")
+        with self.assertRaises(ActionGatewayError):
+            await self.gateway.execute(request)
+        self.assertEqual(len(calls), 1)
 
     async def test_workspace_action_has_contract_and_redacted_lifecycle(self):
         (self.root / "notes.txt").write_text("private workspace content", encoding="utf-8")

@@ -1,25 +1,29 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api/v1';
-const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN || '';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (
+  typeof window !== 'undefined' && window.location.hostname === 'localhost'
+    ? 'http://localhost:8000/api/v1'
+    : 'http://127.0.0.1:8000/api/v1'
+);
 
 let sessionPromise = null;
 
-function withAuthHeaders(headers = {}) {
-  const merged = new Headers(headers);
-  if (API_TOKEN && !merged.has('Authorization')) {
-    merged.set('Authorization', `Bearer ${API_TOKEN}`);
+export class AuthenticationError extends Error {}
+
+function sessionExpired() {
+  sessionPromise = null;
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('open-dots:authentication-required'));
   }
-  return merged;
 }
 
-async function ensureSession() {
+export async function ensureSession() {
   if (typeof window === 'undefined') return null;
   if (!sessionPromise) {
     sessionPromise = fetch(`${API_BASE_URL}/auth/session`, {
       credentials: 'include',
-      headers: withAuthHeaders(),
     })
       .then((res) => {
-        if (!res.ok) throw new Error('Authentication required');
+        if (res.status === 401) throw new AuthenticationError('Sign in to Open Dots.');
+        if (!res.ok) throw new Error('Could not reach the authentication service.');
         return res.json();
       })
       .catch((err) => {
@@ -31,12 +35,39 @@ async function ensureSession() {
 }
 
 async function apiFetch(url, options = {}) {
-  await ensureSession();
-  return fetch(url, {
+  try {
+    await ensureSession();
+  } catch (error) {
+    if (error instanceof AuthenticationError) sessionExpired();
+    throw error;
+  }
+  const response = await fetch(url, {
     ...options,
     credentials: 'include',
-    headers: withAuthHeaders(options.headers),
   });
+  if (response.status === 401) {
+    sessionExpired();
+    throw new AuthenticationError('Your session expired. Sign in again.');
+  }
+  return response;
+}
+
+export async function login(token) {
+  const response = await fetch(`${API_BASE_URL}/auth/login`, {
+    method: 'POST', credentials: 'include',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
+  });
+  if (response.status === 401) throw new AuthenticationError('The owner token is incorrect.');
+  if (!response.ok) throw new Error('Sign-in failed. Check the API connection and allowed origins.');
+  const session = await response.json();
+  sessionPromise = Promise.resolve(session);
+  return session;
+}
+
+export async function logout() {
+  const response = await fetch(`${API_BASE_URL}/auth/logout`, { method: 'POST', credentials: 'include' });
+  if (!response.ok) throw new Error('Could not sign out. Reconnect to the API and retry.');
+  sessionExpired();
 }
 
 export async function fetchBots() {
@@ -235,6 +266,11 @@ export function subscribeToChatStream(threadId, model, onEvent, onError) {
       if (onError && typeof onError === "function") {
         onError(err);
       }
+      // 跨站 Guest 下 EventSource 不可用；失败时清 session 并再鉴权。
+      sessionPromise = null;
+      ensureSession().catch((error) => {
+        if (error instanceof AuthenticationError) sessionExpired();
+      });
     }
   })();
 
@@ -275,7 +311,13 @@ export async function saveSettings(settingsData) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settingsData),
   });
-  if (!res.ok) throw new Error('Failed to save settings');
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    const detail = Array.isArray(error.detail)
+      ? error.detail.map((item) => item.msg).join(' ')
+      : error.detail;
+    throw new Error(detail || 'Failed to save settings');
+  }
   return res.json();
 }
 

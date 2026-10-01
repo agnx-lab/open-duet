@@ -105,7 +105,8 @@ async def _run_action(
 @router.get("/{bot_id}")
 async def computer_status(bot_id: str):
     _ensure_bot(bot_id)
-    status = computer_provider.describe(bot_id)
+    reconcile = getattr(computer_provider, "reconcile", None)
+    status = await reconcile(bot_id) if reconcile else computer_provider.describe(bot_id)
     return {
         "status": status.to_dict(),
         "created": status.generation > 0,
@@ -164,7 +165,10 @@ async def execute_approved_computer_action(bot_id: str, request_id: str):
     decision = await action_gateway.wait_for_decision(request)
     if decision != "allow":
         return {"status": decision, "request": request.model_dump()}
-    result = await action_gateway.execute(request)
+    try:
+        result = await action_gateway.execute(request)
+    except ActionGatewayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result.status != "completed":
         raise HTTPException(status_code=409, detail=result.error or "Computer action failed.")
     return {

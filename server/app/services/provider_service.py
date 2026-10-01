@@ -124,7 +124,7 @@ class ModelProviderService:
         if not api_key:
             yield {
                 "type": "content.delta",
-                "delta": "An inference API key is missing. Add one in App Settings → Connections."
+                "delta": "An inference API key is missing. Add one in App Settings → Model provider."
             }
             yield {"type": "turn.completed", "ok": False}
             return
@@ -132,9 +132,19 @@ class ModelProviderService:
         if not base_url:
             yield {
                 "type": "content.delta",
-                "delta": "An inference API base URL is missing. Add it in App Settings → Connections."
+                "delta": "An inference API base URL is missing. Add it in App Settings → Model provider."
             }
             yield {"type": "turn.completed", "ok": False}
+            return
+
+        app_settings = storage_service.get_settings()
+
+        if app_settings.get("model_api_wire_api") == "responses":
+            async for event in self._stream_responses(
+                base_url, api_key, model, messages, system_prompt,
+                app_settings.get("model_api_headers") or {},
+            ):
+                yield event
             return
 
         if compat in {"openai", "openai-compatible", "deepseek"}:
@@ -188,6 +198,7 @@ class ModelProviderService:
 
         # Headers expected by the configured inference endpoint.
         headers = {
+            **(app_settings.get("model_api_headers") or {}),
             "Content-Type": "application/json",
             "x-api-key": api_key,
         }
@@ -310,5 +321,54 @@ class ModelProviderService:
         error_display = last_error if last_error else "Unable to connect to the inference endpoint."
         yield {"type": "content.delta", "delta": error_display}
         yield {"type": "turn.completed", "ok": False}
+
+    async def _stream_responses(self, base_url, api_key, model, messages, system_prompt, extra_headers):
+        inputs = []
+        for message in messages:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+            if role == "user" and message.get("image_url"):
+                content = [
+                    {"type": "input_text", "text": content},
+                    {"type": "input_image", "image_url": message["image_url"]},
+                ]
+            inputs.append({"role": role, "content": content})
+
+        headers = {**extra_headers, "Authorization": f"Bearer {api_key}",
+                   "Content-Type": "application/json", "Accept": "text/event-stream"}
+        body = {"model": model, "input": inputs, "instructions": system_prompt,
+                "stream": True, "store": False}
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream("POST", f"{base_url}/responses", json=body, headers=headers) as response:
+                    if not response.is_success:
+                        raise RuntimeError(f"Responses API returned HTTP {response.status_code}.")
+                    data_lines = []
+                    async for line in response.aiter_lines():
+                        if line.startswith("data:"):
+                            data_lines.append(line[5:].lstrip())
+                        elif not line and data_lines:
+                            payload = "\n".join(data_lines)
+                            data_lines = []
+                            if payload == "[DONE]":
+                                break
+                            event = json.loads(payload)
+                            event_type = event.get("type")
+                            if event_type == "response.output_text.delta":
+                                yield {"type": "content.delta", "delta": event.get("delta", "")}
+                            elif event_type == "response.refusal.delta":
+                                yield {"type": "content.delta", "delta": event.get("delta", "")}
+                            elif event_type == "response.completed":
+                                yield {"type": "turn.completed", "ok": True}
+                                return
+                            elif event_type in {"response.failed", "response.incomplete", "error"}:
+                                raise RuntimeError(f"Responses API ended with {event_type}.")
+                    raise RuntimeError("Responses stream ended before completion.")
+        except (httpx.HTTPError, ValueError, RuntimeError) as exc:
+            # Do not expose upstream bodies, request headers, or credentials.
+            detail = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+            yield {"type": "content.delta", "delta": f"Inference request failed: {detail}"}
+            yield {"type": "turn.completed", "ok": False}
+
 
 provider_service = ModelProviderService()
