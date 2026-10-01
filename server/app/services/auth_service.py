@@ -50,7 +50,10 @@ class AuthService:
         return token
 
     def authenticate_token(self, token: Optional[str]) -> bool:
-        return bool(token) and secrets.compare_digest(token.encode("utf-8"), self.token.encode("utf-8"))
+        candidate = (token or "").strip()
+        if not candidate:
+            return False
+        return secrets.compare_digest(candidate.encode("utf-8"), self.token.encode("utf-8"))
 
     def authenticate_session(self, token: Optional[str]) -> bool:
         if not token or len(token) > 128:

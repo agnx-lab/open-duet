@@ -4,9 +4,25 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (
     : 'http://127.0.0.1:8000/api/v1'
 );
 
+/** Agnx Guest：launcher 注入；跨站 iframe 下 Cookie 不可靠，鉴权主路径走 Bearer。 */
+const API_TOKEN = (process.env.NEXT_PUBLIC_API_TOKEN || '').trim();
+
 let sessionPromise = null;
 
 export class AuthenticationError extends Error {}
+
+/** 是否已注入 owner token（Guest 嵌页可免手填登录门）。 */
+export function hasInjectedOwnerToken() {
+  return Boolean(API_TOKEN);
+}
+
+export function withAuthHeaders(headers = {}) {
+  const merged = new Headers(headers);
+  if (API_TOKEN && !merged.has('Authorization')) {
+    merged.set('Authorization', `Bearer ${API_TOKEN}`);
+  }
+  return merged;
+}
 
 function sessionExpired() {
   sessionPromise = null;
@@ -20,6 +36,7 @@ export async function ensureSession() {
   if (!sessionPromise) {
     sessionPromise = fetch(`${API_BASE_URL}/auth/session`, {
       credentials: 'include',
+      headers: withAuthHeaders(),
     })
       .then((res) => {
         if (res.status === 401) throw new AuthenticationError('Sign in to Open Dots.');
@@ -44,6 +61,7 @@ async function apiFetch(url, options = {}) {
   const response = await fetch(url, {
     ...options,
     credentials: 'include',
+    headers: withAuthHeaders(options.headers),
   });
   if (response.status === 401) {
     sessionExpired();
@@ -54,8 +72,10 @@ async function apiFetch(url, options = {}) {
 
 export async function login(token) {
   const response = await fetch(`${API_BASE_URL}/auth/login`, {
-    method: 'POST', credentials: 'include',
-    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
+    method: 'POST',
+    credentials: 'include',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ token: String(token || '').trim() }),
   });
   if (response.status === 401) throw new AuthenticationError('The owner token is incorrect.');
   if (!response.ok) throw new Error('Sign-in failed. Check the API connection and allowed origins.');
@@ -65,7 +85,11 @@ export async function login(token) {
 }
 
 export async function logout() {
-  const response = await fetch(`${API_BASE_URL}/auth/logout`, { method: 'POST', credentials: 'include' });
+  const response = await fetch(`${API_BASE_URL}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: withAuthHeaders(),
+  });
   if (!response.ok) throw new Error('Could not sign out. Reconnect to the API and retry.');
   sessionExpired();
 }

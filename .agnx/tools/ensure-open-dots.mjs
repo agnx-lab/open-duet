@@ -158,7 +158,8 @@ function stopPid(pid) {
 }
 
 function guestOrigin(cfg) {
-  return `http://127.0.0.1:${cfg.uiPort}/`;
+  // 上游合并后 `/` 是营销页；真正工作台在 `/app`（含 AuthenticationGate）。
+  return `http://127.0.0.1:${cfg.uiPort}/app`;
 }
 
 function healthUrlFor(cfg) {

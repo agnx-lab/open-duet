@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { AuthenticationError, ensureSession, login, logout } from '../lib/api';
+import {
+  AuthenticationError,
+  ensureSession,
+  hasInjectedOwnerToken,
+  login,
+  logout,
+} from '../lib/api';
 import Dashboard from './Dashboard';
 
 export default function AuthenticationGate() {
@@ -9,6 +15,7 @@ export default function AuthenticationGate() {
   const [token, setToken] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const guestInjected = hasInjectedOwnerToken();
 
   const checkSession = async () => {
     setPhase('loading');
@@ -17,6 +24,16 @@ export default function AuthenticationGate() {
       await ensureSession();
       setPhase('authenticated');
     } catch (failure) {
+      // Guest 已注入 Bearer 仍失败 → 当连接问题，勿逼手填（Cookie 在跨站 iframe 本就不可用）
+      if (guestInjected) {
+        setPhase('unavailable');
+        setError(
+          failure instanceof AuthenticationError
+            ? 'Guest Bearer auth failed. Restart Open Dots sidecar and retry.'
+            : 'Cannot reach the API. Start the server and retry.',
+        );
+        return;
+      }
       setPhase(failure instanceof AuthenticationError ? 'login' : 'unavailable');
       if (!(failure instanceof AuthenticationError)) setError('Cannot reach the API. Start the server and retry.');
     }
@@ -24,7 +41,16 @@ export default function AuthenticationGate() {
 
   useEffect(() => {
     checkSession();
-    const expired = () => { setToken(''); setError(''); setPhase('login'); };
+    const expired = () => {
+      setToken('');
+      setError('');
+      if (guestInjected) {
+        // 注入 token 仍在：清 session 缓存后重试，避免死循环停在登录门
+        void checkSession();
+        return;
+      }
+      setPhase('login');
+    };
     window.addEventListener('open-dots:authentication-required', expired);
     return () => window.removeEventListener('open-dots:authentication-required', expired);
   }, []);
@@ -33,7 +59,7 @@ export default function AuthenticationGate() {
     event.preventDefault();
     setBusy(true);
     setError('');
-    const credential = token;
+    const credential = token.trim();
     setToken('');
     try {
       await login(credential);
@@ -46,8 +72,18 @@ export default function AuthenticationGate() {
   };
 
   const signOut = async () => {
-    try { await logout(); }
-    catch (failure) { setError(failure.message); setPhase('unavailable'); }
+    try {
+      await logout();
+      if (guestInjected) {
+        // Bearer 仍有效，登出后立刻再过门
+        await checkSession();
+        return;
+      }
+      setPhase('login');
+    } catch (failure) {
+      setError(failure.message);
+      setPhase('unavailable');
+    }
   };
 
   if (phase === 'authenticated') return <Dashboard onLogout={signOut} />;
@@ -59,7 +95,12 @@ export default function AuthenticationGate() {
           <p role="alert" className="text-sm text-red-300">{error}</p>
           <button onClick={checkSession} className="rounded-lg bg-violet-600 px-4 py-2 text-sm">Retry connection</button>
         </> : <form onSubmit={signIn} className="space-y-4">
-          <p className="text-sm text-zinc-400">Enter the owner token configured on your server. For a local installation, read the .auth-token file in your data directory (normally ~/.open-dots).</p>
+          <p className="text-sm text-zinc-400">
+            Enter the owner token from your data directory
+            (<code className="text-zinc-300">.auth-token</code>
+            ). Agnx: <code className="text-zinc-300">~/.agnx-dev/apps/data/open-dots/.auth-token</code>
+            ；standalone: <code className="text-zinc-300">~/.open-dots/.auth-token</code>.
+          </p>
           <label htmlFor="owner-token" className="block text-sm">Owner token</label>
           <input id="owner-token" type="password" autoComplete="off" required maxLength={4096} value={token} onChange={(event) => setToken(event.target.value)} disabled={busy} className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 focus:outline-violet-400" />
           <p className="text-xs text-zinc-500">This is the Open Dots login token. Your model provider key is configured after signing in.</p>
