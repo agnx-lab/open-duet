@@ -12,7 +12,7 @@ import { StyleSheet } from "react-native-unistyles";
 import type {
   WorkspaceAppBrandLogoLoaderPanelProps,
   WorkspaceAppHostApi,
-} from "@getagnx/app-sdk";
+} from "@agnx-lab/app-sdk";
 import { OPEN_DOTS_APP_ID, OPEN_DOTS_CONFIG_KEY, OPEN_DOTS_ENSURE_TOOL_REL } from "./constants";
 import {
   loadOpenDotsConfigFromHost,

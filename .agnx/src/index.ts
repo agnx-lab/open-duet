@@ -1,5 +1,5 @@
 // 场景：Open Dots Sub App 入口 — Guest + ensure + retain + 极薄工具 + 详情配置。
-import type { WorkspaceAppHostApi, WorkspaceAppModule } from "@getagnx/app-sdk";
+import type { WorkspaceAppHostApi, WorkspaceAppModule } from "@agnx-lab/app-sdk";
 import { OpenDotsIcon } from "./open-dots-icon";
 import {
   OPEN_DOTS_APP_ID,

@@ -1,5 +1,5 @@
 // 场景：Open Dots 端口 / 密钥 / workspace / computer 经 host.config 落盘。
-import type { WorkspaceAppConfigApi } from "@getagnx/app-sdk";
+import type { WorkspaceAppConfigApi } from "@agnx-lab/app-sdk";
 import {
   DEFAULT_OPEN_DOTS_API_PORT,
   DEFAULT_OPEN_DOTS_UI_PORT,

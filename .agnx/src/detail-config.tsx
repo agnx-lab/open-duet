@@ -2,7 +2,7 @@
 import { createElement, useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import { Pressable, Text, TextInput, View, type TextStyle, type ViewStyle } from "react-native";
 import { useUnistyles } from "react-native-unistyles";
-import type { WorkspaceAppHostApi } from "@getagnx/app-sdk";
+import type { WorkspaceAppHostApi } from "@agnx-lab/app-sdk";
 import {
   DEFAULT_OPEN_DOTS_API_PORT,
   DEFAULT_OPEN_DOTS_UI_PORT,

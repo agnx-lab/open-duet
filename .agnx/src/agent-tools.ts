@@ -1,5 +1,5 @@
 // 场景：W4 — 极薄 Agnx Agent 工具：open_dots_health / open_dots_open。
-import type { WorkspaceAppHostApi } from "@getagnx/app-sdk";
+import type { WorkspaceAppHostApi } from "@agnx-lab/app-sdk";
 import {
   OPEN_DOTS_APP_ID,
   OPEN_DOTS_ENSURE_TOOL_REL,
